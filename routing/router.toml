@@ -1,0 +1,85 @@
+# ~/.llm/router.toml
+#
+# Local routing config for a two-lane setup: one frontier model for hard
+# judgment calls, one cheap workhorse for everything a test can grade.
+#
+# This is the expanded version of the config shown in the video. The shape is
+# what matters — adapt the model names and paths to your tools.
+#
+# Read routing/rules.md before you edit the [[route]] blocks. The config is
+# easy; keeping the lanes strict is the part that saves you money.
+
+[router]
+# The two lanes. Names are yours to choose.
+frontier  = "claude"      # hard judgment calls, architecture, ambiguous specs
+workhorse = "deepseek"    # bulk edits, refactors, anything a test can grade
+
+# Fail closed. If no rule matches, do NOT silently fall through to the
+# workhorse — that is how the cheap lane becomes your most expensive lane.
+default = "frontier"
+
+# Keep the cache warm and the lanes honest. See rules.md §"Cache discipline".
+strict   = true
+log      = true
+log_path = "~/.llm/router.log"
+
+[budgets]
+# Soft monthly ceilings in USD. The router warns, it does not hard-stop —
+# that's what your vendor's billing alerts are for.
+frontier_monthly  = 100
+workhorse_monthly = 100
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Routes are evaluated top to bottom. First match wins.
+#
+# The `when` value is the *verifiability* test, not a difficulty guess:
+#   testable      → a test/typecheck/lint can judge the result
+#   architecture  → needs judgment the tests can't express
+#   bulk          → mechanical, high-volume, low-risk edits
+#   unknown       → anything the router can't classify
+# ─────────────────────────────────────────────────────────────────────
+
+[[route]]
+name        = "mechanical-edits"
+when        = "testable"
+model       = "workhorse"
+max_context = "large"     # cheap lane is where big context belongs
+# High-volume mechanical work: renames, formatting, test scaffolding,
+# generated code, dependency bumps with a green suite.
+
+[[route]]
+name        = "bulk-refactor"
+when        = "bulk"
+model       = "workhorse"
+guard       = "tests-must-pass"
+
+[[route]]
+name        = "architecture"
+when        = "architecture"
+model       = "frontier"
+# Ambiguous requirements, cross-cutting design, "why is this flaky",
+# anything where the correct answer isn't expressible as a passing test.
+
+[[route]]
+name        = "unclassified"
+when        = "unknown"
+model       = "frontier"
+# Deliberately expensive. Unknown work is where a bad cheap answer costs
+# you a retry plus a review — more than the frontier call would have.
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Cross-model trust.
+#
+# When the frontier model reviews work produced by the workhorse, tell it
+# explicitly that the other model is competent. Without this it will
+# reread and retest every single diff and your savings evaporate.
+# ─────────────────────────────────────────────────────────────────────
+
+[trust]
+cross_review          = true
+declare_competence    = true
+# The exact line to inject is in adapters/claude-code.md.
+# Only spot-check a sample of diffs, not all of them.
+spot_check_ratio      = 0.15
